@@ -1,6 +1,8 @@
 # Wind
 GreatFree as a Generic &amp; Self-Contained Distributed Programming Paradigm for Internet-Oriented Computing Environment
 
+10/23/2020, Bing Li
+
 
 The World First Generic & Self-Contained Distributed Programming Paradigm
 The World First Generic & Self-Contained Distributed Programming Paradigm
