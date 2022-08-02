@@ -5,7 +5,7 @@ package org.greatfree.concurrency;
  */
 
 // Created: 11/04/2014, Bing Li
-public interface CheckIdleable
+public interface IdleCheckable
 {
 	// The method signature to check the idle state. 11/04/2014, Bing Li
 	public void checkIdle() throws InterruptedException;

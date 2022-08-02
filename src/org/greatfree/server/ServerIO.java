@@ -1,4 +1,4 @@
-package org.greatfree.client;
+package org.greatfree.server;
 
 import java.io.IOException;
 import java.io.ObjectInputStream;

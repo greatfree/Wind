@@ -1,13 +1,13 @@
 package org.greatfree.testing.concurrency;
 
-import org.greatfree.concurrency.Async;
+import org.greatfree.concurrency.Notifier;
 
 // Created: 09/10/2018, Bing Li
-class MyActor extends Async<MyNotification>
+class MyNotifier implements Notifier<MyNotification>
 {
 
 	@Override
-	public void perform(MyNotification notification)
+	public void notify(MyNotification notification)
 	{
 		try
 		{

@@ -14,166 +14,168 @@ import org.greatfree.util.CollectionSorter;
 import org.greatfree.util.UtilConfig;
 
 // Created: 09/09/2018, Bing Li
-public class AsyncPool<Message> extends Thread implements CheckIdleable
+public class NotifierPool<Notification> extends Thread implements IdleCheckable
 {
 	// The actors that are available to sent the messages concurrently.. 11/20/2014, Bing Li
-	private Map<String, Runner<AsyncActor<Message>>> actors;
+	private Map<String, Runner<NotificationThread<Notification>>> threads;
 	// The queue which contains the message to be processed. 11/20/2014, Bing Li
-	private Queue<Message> messageQueue;
+	private Queue<Notification> notificationQueue;
 	// The size of the message queue for each actor. 11/20/2014, Bing Li
-	private final int messageQueueSize;
+	private final int queueSize;
 	// The count of actors to be managed. 11/20/2014, Bing Li
-	private final int actorSize;
+	private final int notifierSize;
 	// The ScheduledFuture is used to cancel the scheduled task when disposing the dispatcher to save resources. 02/01/2016, Bing Li
 	private ScheduledFuture<?> idleCheckingTask;
 	// The idle checker to monitor whether an actor is idle long enough. 11/20/2014, Bing Li
-	private IdleChecker<AsyncPool<Message>> idleChecker;
+	private IdleChecker<NotifierPool<Notification>> idleChecker;
 	// The collaborator is used to pause the dispatcher when no messages are available and notify to continue when new messages are received. 11/20/2014, Bing Li
 	private Sync collaborator;
 	// The time to be waited when no messages are available in the class. 11/20/2014, Bing Li
 	private final long poolingWaitTime;
 	// The time to be waited when no messages are available in each actor. 11/20/2014, Bing Li
-	private final long actorWaitTime;
+	private final long notifierWaitTime;
 	// The delay time before a periodical idle-checking is started. 01/20/2016, Bing Li
 	private final long idleCheckDelay;
 	// The idle-checking period. 01/20/2016, Bing Li
 	private final long idleCheckPeriod;
 	// When the actor has no messages to send, it has to wait. But if the waiting time is long enough, it needs to be disposed. The waitRound defines the count of outside-most loop in the run(). Because of it, the actor has killed after no messages are available for sufficient time. 01/20/2016, Bing Li 
-	private final int waitRound;
+//	private final int waitRound;
 	// When self-disposing the dispatcher to save resources, it needs to keep synchronization between the message queue and the disposing. The lock is responsible for that. 02/01/2016, Bing Li
 	private ReentrantLock monitorLock;
 	// The actor which contains the function to be executed asynchronously. 09/10/2018, Bing Li
-	private Async<Message> actor;
+	private Notifier<Notification> notifier;
 
 	/*
 	 * Initialize. 11/20/2014, Bing Li
 	 */
-	public AsyncPool(ActorPoolBuilder<Message> builder)
+	public NotifierPool(NotifierPoolBuilder<Notification> builder)
 	{
-		this.actors = new ConcurrentHashMap<String, Runner<AsyncActor<Message>>>();
-		this.messageQueue = new LinkedBlockingQueue<Message>();
-		this.messageQueueSize = builder.getMessageQueueSize();
-		this.actorSize = builder.getActorSize();
+		this.threads = new ConcurrentHashMap<String, Runner<NotificationThread<Notification>>>();
+		this.notificationQueue = new LinkedBlockingQueue<Notification>();
+		this.queueSize = builder.getQueueSize();
+		this.notifierSize = builder.getNotifierSize();
 
-		Scheduler.GREATFREE().init(builder.getSchedulerPoolSize(), builder.getSchedulerKeepAliveTime());
+		Scheduler.PERIOD().init(builder.getSchedulerPoolSize(), builder.getSchedulerKeepAliveTime());
 
-		this.idleChecker = new IdleChecker<AsyncPool<Message>>(this);
+		this.idleChecker = new IdleChecker<NotifierPool<Notification>>(this);
 		this.collaborator = new Sync(true);
 		this.poolingWaitTime = builder.getPoolingWaitTime();
-		this.actorWaitTime = builder.getActorWaitTime();
-		this.waitRound = builder.getWaitRound();
+		this.notifierWaitTime = builder.getNotifierWaitTime();
+//		this.waitRound = builder.getWaitRound();
 		this.idleCheckDelay = builder.getIdleCheckDelay();
 		this.idleCheckPeriod = builder.getIdleCheckPeriod();
 		this.monitorLock = new ReentrantLock();
-		this.actor = builder.getActor();
+		this.notifier = builder.getNotifier();
 	}
 	
-	public static class ActorPoolBuilder<Message> implements Builder<AsyncPool<Message>>
+	public static class NotifierPoolBuilder<Notification> implements Builder<NotifierPool<Notification>>
 	{
 		// The size of the event queue for each actor. 11/20/2014, Bing Li
-		private int messageQueueSize;
+		private int queueSize;
 		// The count of actors to be managed. 11/20/2014, Bing Li
-		private int actorSize;
+		private int notifierSize;
 		// The time to be waited when no messages are available in the class. 11/20/2014, Bing Li
 		private long poolingWaitTime;
 		// The time to be waited when no messages are available in each actor. 11/20/2014, Bing Li
-		private long actorWaitTime;
+		private long notifierWaitTime;
 		// The delay time before a periodical idle-checking is started. 01/20/2016, Bing Li
 		private long idleCheckDelay;
 		// The idle-checking period. 01/20/2016, Bing Li
 		private long idleCheckPeriod;
 		// When the actor has no messages to send, it has to wait. But if the waiting time is long enough, it needs to be disposed. The waitRound defines the count of outside-most loop in the run(). Because of it, the actor has killed after no messages are available for sufficient time. 01/20/2016, Bing Li 
-		private int waitRound;
+//		private int waitRound;
 		
 		// The scheduler's thread pool size. 05/11/2017, Bing Li
 		private int schedulerPoolSize;
 		// The time to keep alive for threads in the scheduler. 05/11/2017, Bing Li
 		private long schedulerKeepAliveTime;
-		private Async<Message> actor;
+		private Notifier<Notification> notifier;
 		
-		public ActorPoolBuilder()
+		public NotifierPoolBuilder()
 		{
 		}
 		
-		public ActorPoolBuilder<Message> messageQueueSize(int messageQueueSize)
+		public NotifierPoolBuilder<Notification> queueSize(int queueSize)
 		{
-			this.messageQueueSize = messageQueueSize;
+			this.queueSize = queueSize;
 			return this;
 		}
 		
-		public ActorPoolBuilder<Message> actorSize(int actorSize)
+		public NotifierPoolBuilder<Notification> notifierSize(int notifierSize)
 		{
-			this.actorSize = actorSize;
+			this.notifierSize = notifierSize;
 			return this;
 		}
 
-		public ActorPoolBuilder<Message> poolingWaitTime(long poolingWaitTime)
+		public NotifierPoolBuilder<Notification> poolingWaitTime(long poolingWaitTime)
 		{
 			this.poolingWaitTime = poolingWaitTime;
 			return this;
 		}
 
-		public ActorPoolBuilder<Message> actorWaitTime(long actorWaitTime)
+		public NotifierPoolBuilder<Notification> notifierWaitTime(long notifierWaitTime)
 		{
-			this.actorWaitTime = actorWaitTime;
+			this.notifierWaitTime = notifierWaitTime;
 			return this;
 		}
 
-		public ActorPoolBuilder<Message> idleCheckDelay(long idleCheckDelay)
+		public NotifierPoolBuilder<Notification> idleCheckDelay(long idleCheckDelay)
 		{
 			this.idleCheckDelay = idleCheckDelay;
 			return this;
 		}
 
-		public ActorPoolBuilder<Message> idleCheckPeriod(long idleCheckPeriod)
+		public NotifierPoolBuilder<Notification> idleCheckPeriod(long idleCheckPeriod)
 		{
 			this.idleCheckPeriod = idleCheckPeriod;
 			return this;
 		}
 
+		/*
 		public ActorPoolBuilder<Message> waitRound(int waitRound)
 		{
 			this.waitRound = waitRound;
 			return this;
 		}
+		*/
 
-		public ActorPoolBuilder<Message> schedulerPoolSize(int schedulerPoolSize)
+		public NotifierPoolBuilder<Notification> schedulerPoolSize(int schedulerPoolSize)
 		{
 			this.schedulerPoolSize = schedulerPoolSize;
 			return this;
 		}
 
-		public ActorPoolBuilder<Message> schedulerKeepAliveTime(long schedulerKeepAliveTime)
+		public NotifierPoolBuilder<Notification> schedulerKeepAliveTime(long schedulerKeepAliveTime)
 		{
 			this.schedulerKeepAliveTime = schedulerKeepAliveTime;
 			return this;
 		}
 		
-		public ActorPoolBuilder<Message> actor(Async<Message> actor)
+		public NotifierPoolBuilder<Notification> notifier(Notifier<Notification> notifier)
 		{
-			this.actor = actor;
+			this.notifier = notifier;
 			return this;
 		}
 
 		@Override
-		public AsyncPool<Message> build()
+		public NotifierPool<Notification> build()
 		{
-			return new AsyncPool<Message>(this);
+			return new NotifierPool<Notification>(this);
 		}
 		
-		public Async<Message> getActor()
+		public Notifier<Notification> getNotifier()
 		{
-			return this.actor;
+			return this.notifier;
 		}
 		
-		public int getMessageQueueSize()
+		public int getQueueSize()
 		{
-			return this.messageQueueSize;
+			return this.queueSize;
 		}
 		
-		public int getActorSize()
+		public int getNotifierSize()
 		{
-			return this.actorSize;
+			return this.notifierSize;
 		}
 		
 		public long getPoolingWaitTime()
@@ -181,9 +183,9 @@ public class AsyncPool<Message> extends Thread implements CheckIdleable
 			return this.poolingWaitTime;
 		}
 		
-		public long getActorWaitTime()
+		public long getNotifierWaitTime()
 		{
-			return this.actorWaitTime;
+			return this.notifierWaitTime;
 		}
 		
 		public long getIdleCheckDelay()
@@ -195,11 +197,13 @@ public class AsyncPool<Message> extends Thread implements CheckIdleable
 		{
 			return this.idleCheckPeriod;
 		}
-		
+
+		/*
 		public int getWaitRound()
 		{
 			return this.waitRound;
 		}
+		*/
 
 		public int getSchedulerPoolSize()
 		{
@@ -220,16 +224,16 @@ public class AsyncPool<Message> extends Thread implements CheckIdleable
 		// Reset the collaborator for the new resumption. 02/01/2016, Bing Li
 		this.collaborator.reset();
 		// Check whether the collection to keep actors are disposed. 01/20/2016, Bing Li
-		if (this.actors == null)
+		if (this.threads == null)
 		{
 			// Initialize the collection to keep actors. 01/20/2016, Bing Li
-			this.actors = new ConcurrentHashMap<String, Runner<AsyncActor<Message>>>();
+			this.threads = new ConcurrentHashMap<String, Runner<NotificationThread<Notification>>>();
 		}
 		// Check whether the message queue is disposed. 01/20/2016, Bing Li
-		if (this.messageQueue == null)
+		if (this.notificationQueue == null)
 		{
 			// Initialize the message queue. 01/20/2016, Bing Li
-			this.messageQueue = new LinkedBlockingQueue<Message>();
+			this.notificationQueue = new LinkedBlockingQueue<Notification>();
 		}
 		// Schedule the idle-checking task. 01/20/2016, Bing Li
 		this.setIdleChecker(this.idleCheckDelay, this.idleCheckPeriod);
@@ -264,9 +268,9 @@ public class AsyncPool<Message> extends Thread implements CheckIdleable
 		this.collaborator.shutdown();
 
 		// Clear the message queue. 11/20/2014, Bing Li
-		if (this.messageQueue != null)
+		if (this.notificationQueue != null)
 		{
-			this.messageQueue.clear();
+			this.notificationQueue.clear();
 		}
 		// Detect whether the idle-checking task is initialized. 02/01/2016, Bing Li
 		if (this.idleCheckingTask != null)
@@ -275,12 +279,12 @@ public class AsyncPool<Message> extends Thread implements CheckIdleable
 			this.idleCheckingTask.cancel(true);
 		}
 		// Dispose all of actors created during the dispatcher's running procedure. 11/20/2014, Bing Li
-		for (Runner<AsyncActor<Message>> actor : this.actors.values())
+		for (Runner<NotificationThread<Notification>> entry : this.threads.values())
 		{
-			actor.stop();
+			entry.stop();
 		}
 		// Clear the actor map. 11/20/2014, Bing Li
-		this.actors.clear();
+		this.threads.clear();
 	}
 
 	/*
@@ -290,13 +294,13 @@ public class AsyncPool<Message> extends Thread implements CheckIdleable
 	public void checkIdle() throws InterruptedException
 	{
 		// Check each actor managed by the dispatcher. 11/20/2014, Bing Li
-		for (Runner<AsyncActor<Message>> entry : this.actors.values())
+		for (Runner<NotificationThread<Notification>> entry : this.threads.values())
 		{
 			// If the actor is empty and idle, it is the one to be checked. 11/20/2014, Bing Li
 			if (entry.getFunction().isEmpty() && entry.getFunction().isIdle())
 			{
 				// The algorithm to determine whether an actor should be disposed or not is simple. When it is checked to be idle, it is time to dispose it. 11/20/2014, Bing Li
-				this.actors.remove(entry.getFunction().getKey());
+				this.threads.remove(entry.getFunction().getKey());
 				// Dispose the actor. 11/20/2014, Bing Li
 				entry.stop();
 				// Collect the resource of the actor. 11/20/2014, Bing Li
@@ -311,18 +315,18 @@ public class AsyncPool<Message> extends Thread implements CheckIdleable
 	@Override
 	public void setIdleChecker(long idleCheckDelay, long idleCheckPeriod)
 	{
-		this.idleCheckingTask = Scheduler.GREATFREE().getScheduler().scheduleAtFixedRate(this.idleChecker, idleCheckDelay, idleCheckPeriod, TimeUnit.MILLISECONDS);
+		this.idleCheckingTask = Scheduler.PERIOD().getScheduler().scheduleAtFixedRate(this.idleChecker, idleCheckDelay, idleCheckPeriod, TimeUnit.MILLISECONDS);
 	}
 
 	/*
 	 * Perform the action upon the message asynchronously. 11/20/2014, Bing Li
 	 */
-	public synchronized void perform(Message message)
+	public synchronized void notify(Notification message)
 	{
 		// With the lock, the message queue keeps synchronized with self-disposing mechanism. 02/01/2016, Bing Li
 		this.monitorLock.lock();
 		// Put the message into the queue. 11/20/2014, Bing Li
-		this.messageQueue.add(message);
+		this.notificationQueue.add(message);
 		this.monitorLock.unlock();
 		// Signal the potential waiting thread to schedule actors to perform the action. 11/20/2014, Bing Li
 		this.collaborator.signal();
@@ -337,56 +341,56 @@ public class AsyncPool<Message> extends Thread implements CheckIdleable
 		// Declare a string to keep the selected actor key. 11/20/2014, Bing Li
 		String selectedThreadKey = UtilConfig.NO_KEY;
 		// Initialize the currentRound to maintain the outside-most loop count. 01/20/2016, Bing Li
-		int currentRound = 0;
-		Runner<AsyncActor<Message>> runner;
+//		int currentRound = 0;
+		Runner<NotificationThread<Notification>> runner;
 		// The pool usually runs all of the time unless the local node is shutdown. To shutdown the pool, the shutdown flag of the collaborator is set to true. 11/20/2014, Bing Li
 		while (!this.collaborator.isShutdown())
 		{
 			try
 			{
 				// Check whether messages are available in the queue. 11/20/2014, Bing Li
-				while (!this.messageQueue.isEmpty())
+				while (!this.notificationQueue.isEmpty())
 				{
 					// Since all of the actors created by the dispatcher are saved in the map by their unique keys, it is necessary to check whether any alive actors are available. If so, it is possible to assign tasks to them if they are not so busy. 11/20/2014, Bing Li
-					while (this.actors.size() > 0)
+					while (this.threads.size() > 0)
 					{
 						// Select the actor whose load is the least and keep the key of the actor. 11/20/2014, Bing Li
-						selectedThreadKey = CollectionSorter.minValueKey(this.actors);
+						selectedThreadKey = CollectionSorter.minValueKey(this.threads);
 						// Since no concurrency is applied here, it is possible that the key is invalid. Thus, just check here. 11/20/2014, Bing Li
 						if (selectedThreadKey != null)
 						{
 							// Since no concurrency is applied here, it is possible that the key is out of the map. Thus, just check here. 11/20/2014, Bing Li
-							if (this.actors.containsKey(selectedThreadKey))
+							if (this.threads.containsKey(selectedThreadKey))
 							{
 								try
 								{
 									// Check whether the actor's load reaches the maximum value. 11/20/2014, Bing Li
-									if (this.actors.get(selectedThreadKey).getFunction().isFull())
+									if (this.threads.get(selectedThreadKey).getFunction().isFull())
 									{
 										// Check if the pool is full. If the least load actor is full as checked by the above condition, it denotes that all of the current alive actors are full. So it is required to create an actor to respond the newly received messages if the actor count of the pool does not reach the maximum. 11/20/2014, Bing Li
-										if (this.actors.size() < this.actorSize)
+										if (this.threads.size() < this.notifierSize)
 										{
 											// Create a new actor. 11/20/2014, Bing Li
-											AsyncActor<Message> thread = new AsyncActor<Message>(this.messageQueueSize, this.actorWaitTime, this.actor);
+											NotificationThread<Notification> thread = new NotificationThread<Notification>(this.queueSize, this.notifierWaitTime, this.notifier);
 											// Create an instance of Runner. 05/20/2018, Bing Li
-											runner = new Runner<AsyncActor<Message>>(thread);
+											runner = new Runner<NotificationThread<Notification>>(thread);
 											// Start the runner. 05/20/2018, Bing Li
 											runner.start();
 											// Save the newly created actor into the map. 11/20/2014, Bing Li
-											this.actors.put(thread.getKey(), runner);
+											this.threads.put(thread.getKey(), runner);
 											// Enqueue the message into the queue of the newly created actor. Then, the message will be processed by the actor. 11/20/2014, Bing Li
-											this.actors.get(thread.getKey()).getFunction().enqueue(this.messageQueue.poll());
+											this.threads.get(thread.getKey()).getFunction().enqueue(this.notificationQueue.poll());
 										}
 										else
 										{
 											// Force to put the message into the queue when the count of actors reaches the upper limit and each of the actor's queue is full. 11/20/2014, Bing Li
-											this.actors.get(selectedThreadKey).getFunction().enqueue(this.messageQueue.poll());
+											this.threads.get(selectedThreadKey).getFunction().enqueue(this.notificationQueue.poll());
 										}
 									}
 									else
 									{
 										// If the least load actor's queue is not full, just put the message into the queue. 11/20/2014, Bing Li
-										this.actors.get(selectedThreadKey).getFunction().enqueue(this.messageQueue.poll());
+										this.threads.get(selectedThreadKey).getFunction().enqueue(this.notificationQueue.poll());
 									}
 
 									// Jump out from the loop since the message is put into a thread. 11/20/2014, Bing Li
@@ -401,20 +405,20 @@ public class AsyncPool<Message> extends Thread implements CheckIdleable
 						}
 					}
 					// If no actors are available, it needs to create a new one to take the message. 11/20/2014, Bing Li
-					if (this.actors.size() <= 0)
+					if (this.threads.size() <= 0)
 					{
 						// Create a new actor. 11/20/2014, Bing Li
-						AsyncActor<Message> thread = new AsyncActor<Message>(this.messageQueueSize, this.actorWaitTime, this.actor);
+						NotificationThread<Notification> thread = new NotificationThread<Notification>(this.queueSize, this.notifierWaitTime, this.notifier);
 						// Create an instance of Runner. 05/20/2018, Bing Li
-						runner = new Runner<AsyncActor<Message>>(thread);
+						runner = new Runner<NotificationThread<Notification>>(thread);
 						// Start the runner. 05/20/2018, Bing Li
 						runner.start();
 						// Put it into the map for further reuse. 11/20/2014, Bing Li
-						this.actors.put(thread.getKey(), runner);
+						this.threads.put(thread.getKey(), runner);
 						// Take the message. 11/20/2014, Bing Li
 //						this.threadPool.execute(this.actors.get(thread.getKey()));
 						// Start the thread. 11/20/2014, Bing Li
-						this.actors.get(thread.getKey()).getFunction().enqueue(this.messageQueue.poll());
+						this.threads.get(thread.getKey()).getFunction().enqueue(this.notificationQueue.poll());
 					}
 
 					// If the dispatcher is shutdown, it is not necessary to keep processing the messages. So, jump out the loop and the actor is dead. 11/20/2014, Bing Li
@@ -434,9 +438,10 @@ public class AsyncPool<Message> extends Thread implements CheckIdleable
 					try
 					{
 						// Detect whether the message is empty. 01/20/2016, Bing Li
-						if (this.messageQueue.size() <= 0)
+						if (this.notificationQueue.size() <= 0)
 						{
 							// Check whether the waitRound is infinite. 01/20/2016, Bing Li
+							/*
 							if (this.waitRound != UtilConfig.INFINITE_WAIT_ROUND)
 							{
 								// Check whether the outside-most loop reaches the upper limit. 01/20/2016, Bing Li
@@ -452,6 +457,17 @@ public class AsyncPool<Message> extends Thread implements CheckIdleable
 									}
 								}
 							}
+							*/
+							// Check whether all of the actors are disposed. 01/20/2016, Bing Li
+							/*
+							if (this.actors.isEmpty())
+							{
+								// Dispose the actor manager. 01/20/2016, Bing Li
+								this.dispose();
+								// Quit the outside-most loop. 01/20/2016, Bing Li
+								break;
+							}
+							*/
 						}
 					}
 					finally
@@ -460,10 +476,12 @@ public class AsyncPool<Message> extends Thread implements CheckIdleable
 					}
 				}
 			}
+			/*
 			catch (InterruptedException e)
 			{
 				e.printStackTrace();
 			}
+			*/
 			catch (NullPointerException e)
 			{
 				e.printStackTrace();

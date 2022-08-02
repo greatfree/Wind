@@ -3,16 +3,16 @@ package org.greatfree.concurrency;
 import org.greatfree.concurrency.reactive.NotificationObjectQueue;
 
 // Created: 09/09/2018, Bing Li
-final class AsyncActor<Notification> extends NotificationObjectQueue<Notification>
+final class NotificationThread<Notification> extends NotificationObjectQueue<Notification>
 {
-	private Async<Notification> actor;
+	private Notifier<Notification> notifier;
 	private long waitTime;
 
-	public AsyncActor(int taskSize, long waitTime, Async<Notification> actor)
+	public NotificationThread(int queueSize, long waitTime, Notifier<Notification> notifier)
 	{
-		super(taskSize);
+		super(queueSize);
 		this.waitTime = waitTime;
-		this.actor = actor;
+		this.notifier = notifier;
 	}
 
 	/*
@@ -26,15 +26,15 @@ final class AsyncActor<Notification> extends NotificationObjectQueue<Notificatio
 	public void run()
 	{
 		Notification notification;
-		while (!this.isShutdown())
+		while (!super.isShutdown())
 		{
-			while (!this.isEmpty())
+			while (!super.isEmpty())
 			{
 				try
 				{
-					notification = this.getNotification();
-					this.actor.perform(notification);
-					this.disposeObject(notification);
+					notification = super.dequeue();
+					this.notifier.notify(notification);
+					super.disposeObject(notification);
 				}
 				catch (InterruptedException e)
 				{
@@ -43,14 +43,13 @@ final class AsyncActor<Notification> extends NotificationObjectQueue<Notificatio
 			}
 			try
 			{
-				this.holdOn(this.waitTime);
+				super.holdOn(this.waitTime);
 			}
 			catch (InterruptedException e)
 			{
 				e.printStackTrace();
 			}
 		}
-		
 	}
 
 //	public abstract void perform(Notification notification);
